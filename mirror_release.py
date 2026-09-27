@@ -68,13 +68,22 @@ def upload(repo_path, release_id, token, package):
     prefix = (f"--{boundary}\r\n"
               f'Content-Disposition: form-data; name="file"; filename="{ASSET}"\r\n'
               "Content-Type: application/octet-stream\r\n\r\n").encode()
-    body = prefix + package.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+    suffix = f"\r\n--{boundary}--\r\n".encode()
+    # Stream small writes: a single 30 MB socket send can time out on the
+    # GitHub runner's slower connection to Gitee despite steady progress.
+    def chunks():
+        yield prefix
+        with package.open("rb") as source:
+            while chunk := source.read(128 * 1024):
+                yield chunk
+        yield suffix
     request = urllib.request.Request(
-        f"{API}{repo_path}/releases/{release_id}/attach_files", data=body,
+        f"{API}{repo_path}/releases/{release_id}/attach_files", data=chunks(),
         headers={"Authorization": f"Bearer {token}",
                  "Content-Type": f"multipart/form-data; boundary={boundary}",
+                 "Content-Length": str(len(prefix) + package.stat().st_size + len(suffix)),
                  "User-Agent": HEADERS["User-Agent"]})
-    with urllib.request.urlopen(request, timeout=240) as response:
+    with urllib.request.urlopen(request, timeout=180) as response:
         return json.load(response)
 
 
@@ -155,7 +164,23 @@ def main():
         if len(existing) > 1:
             raise ValueError("Gitee release contains duplicate encrypted assets")
         if not existing:
-            uploaded = upload(repo_path, gitee_release["id"], token, package)
+            for attempt in range(3):
+                try:
+                    uploaded = upload(repo_path, gitee_release["id"], token, package)
+                    break
+                except (urllib.error.URLError, TimeoutError) as error:
+                    if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code != 429:
+                        raise
+                    refreshed = json_request(release_path)
+                    recovered = [item for item in refreshed.get("assets", [])
+                                 if item.get("name") == ASSET]
+                    if len(recovered) == 1:
+                        uploaded = recovered[0]
+                        break
+                    if attempt == 2:
+                        raise
+                    print(f"Gitee upload attempt {attempt + 1} failed; retrying", flush=True)
+                    time.sleep(10 * (attempt + 1))
             if not uploaded.get("browser_download_url", "").startswith(
                     f"https://gitee.com/{gitee_repo}/"):
                 raise ValueError("Gitee returned an unexpected upload URL")
