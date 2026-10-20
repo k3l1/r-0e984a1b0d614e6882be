@@ -1,0 +1,49 @@
+name: One-time isolated Guangzhou release mirror
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  mirror:
+    runs-on: [self-hosted, linux, x64, bianbian-gitee-once-060]
+    timeout-minutes: 10
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GITEE_REPO: ${{ secrets.GITEE_REPO }}
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Publish encrypted package and verify from Guangzhou
+        shell: bash
+        run: |
+          python3 -u - <<'PY'
+          import hashlib, json, os, shutil, urllib.request
+          from pathlib import Path
+          import mirror_release as mirror
+          cached = Path('/opt/bianbian-gitee-once/payload.7z')
+          upstream = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['RELEASE_TAG']}/payload.7z"
+          download = mirror.download
+          def cached_download(url, destination=None):
+              if destination is not None and url == upstream:
+                  shutil.copyfile(cached, destination)
+                  return cached.stat().st_size, hashlib.sha256(cached.read_bytes()).hexdigest()
+              return download(url, destination)
+          mirror.download = cached_download
+          mirror.main()
+          source = mirror.json_request(f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/releases/tags/{os.environ['RELEASE_TAG']}")
+          target_path = f"/repos/{os.environ['GITEE_REPO']}/releases"
+          target = mirror.json_request(mirror.API + target_path + '/tags/' + os.environ['RELEASE_TAG'])
+          request = urllib.request.Request(mirror.API + target_path + '/' + str(int(target['id'])),
+              data=json.dumps({'body': source['body'], 'name': source['name']}).encode(),
+              headers={'Authorization': 'Bearer ' + os.environ['GITEE_TOKEN'], 'Content-Type': 'application/json', 'User-Agent': 'EncryptedReleaseMirror/1.0'}, method='PATCH')
+          with urllib.request.urlopen(request, timeout=30) as response:
+              assert response.status == 200
+          print('Gitee release notes synchronized.')
+          PY
