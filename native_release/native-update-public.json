@@ -1,0 +1,11 @@
+{
+  "public_key": "S25-rtHi75cVnHK6M-FjuBKk4m5uNGt3k1k42hoe_U8",
+  "channel_urls": [
+    "https://gitee.com/IceWorm/r-0e984a1b0d614e6882be/releases/download/native-channel-v3/native-update.json",
+    "https://github.com/k3l1/r-0e984a1b0d614e6882be/releases/download/native-channel-v3/native-update.json"
+  ],
+  "download_prefixes": [
+    "https://gitee.com/IceWorm/r-0e984a1b0d614e6882be/releases/download/native-v",
+    "https://github.com/k3l1/r-0e984a1b0d614e6882be/releases/download/native-v"
+  ]
+}
