@@ -74,10 +74,22 @@ class Gitee:
         boundary = 'autotrans-' + secrets.token_hex(16)
         head = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
                 f'filename="{path.name}"\r\nContent-Type: application/octet-stream\r\n\r\n').encode()
-        body = head + data + f'\r\n--{boundary}--\r\n'.encode()
-        headers = dict(self.headers, **{'Content-Type': f'multipart/form-data; boundary={boundary}'})
+        tail = f'\r\n--{boundary}--\r\n'.encode()
+        # A single sendall() applies its timeout to the entire cross-border
+        # upload. Small writes retain a bounded per-write timeout without
+        # requiring the whole package to fit into one timeout interval.
+        def body():
+            print(f'Uploading {path.name}: {len(data)} bytes', flush=True)
+            yield head
+            for offset in range(0, len(data), 65536):
+                if offset and offset % (1024 * 1024) == 0:
+                    print(f'Sent {offset} bytes of {path.name}', flush=True)
+                yield data[offset:offset + 65536]
+            yield tail
+        headers = dict(self.headers, **{'Content-Type': f'multipart/form-data; boundary={boundary}',
+                                       'Content-Length': str(len(head) + len(data) + len(tail))})
         endpoint = f"/releases/{release['id']}/attach_files"
-        request = urllib.request.Request(BASE + endpoint, data=body, headers=headers, method='POST')
+        request = urllib.request.Request(BASE + endpoint, data=body(), headers=headers, method='POST')
         try:
             with self.opener.open(request, timeout=180) as response:
                 asset = json.load(response)
